@@ -20,6 +20,24 @@ on:
         required: true
         type: string
 
+      publish-to-ecr:
+        type: boolean
+        default: false
+
+      aws-region:
+        type: string
+        default: ""
+
+      aws-account-id:
+        type: string
+        default: ""
+
+    secrets:
+      aws-access-key-id:
+        required: false
+      aws-secret-access-key:
+        required: false
+
 permissions:
   contents: read
 
@@ -29,18 +47,78 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
+    env:
+      BUILD_CONTEXT: ${{ inputs.context }}
+      DOCKERFILE: ${{ inputs.dockerfile }}
+      IMAGE_NAME: ${{ inputs.image-name }}
+      IMAGE_TAG: sha-${{ github.sha }}
+      AWS_REGION: ${{ inputs.aws-region }}
+      AWS_ACCOUNT_ID: ${{ inputs.aws-account-id }}
+      PUBLISH_TO_ECR: ${{ inputs.publish-to-ecr && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
     steps:
       - name: Obtener el código de la aplicación
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Construir imagen Docker
-        env:
-          BUILD_CONTEXT: ${{ inputs.context }}
-          DOCKERFILE: ${{ inputs.dockerfile }}
-          IMAGE_NAME: ${{ inputs.image-name }}
-          IMAGE_TAG: sha-${{ github.sha }}
+        shell: bash
         run: |
           docker build \
             --file "$DOCKERFILE" \
             --tag "$IMAGE_NAME:$IMAGE_TAG" \
             "$BUILD_CONTEXT"
+
+      - name: Comprobar configuración AWS
+        if: env.PUBLISH_TO_ECR == 'true'
+        shell: bash
+        run: |
+          if [[ -z "$AWS_REGION" || ! "$AWS_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
+            echo "Configura AWS_REGION y AWS_ACCOUNT_ID en GitHub Actions." >&2
+            exit 1
+          fi
+
+      - name: Autenticar en AWS
+        if: env.PUBLISH_TO_ECR == 'true'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-region: ${{ inputs.aws-region }}
+          aws-access-key-id: ${{ secrets.aws-access-key-id }}
+          aws-secret-access-key: ${{ secrets.aws-secret-access-key }}
+          allowed-account-ids: ${{ inputs.aws-account-id }}
+          force-skip-oidc: true
+          
+      - name: Publicar imagen en ECR
+        if: env.PUBLISH_TO_ECR == 'true'
+        shell: bash
+        run: |
+          registry="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          image="$registry/$IMAGE_NAME:$IMAGE_TAG"
+
+          result=$(aws ecr batch-get-image \
+            --registry-id "$AWS_ACCOUNT_ID" \
+            --repository-name "$IMAGE_NAME" \
+            --image-ids "imageTag=$IMAGE_TAG" \
+            --query '[images[0].imageId.imageDigest, failures[0].failureCode]' \
+            --output text \
+            --no-cli-pager)
+
+          read -r digest failure <<< "$result"
+
+          if [[ -n "$digest" && "$digest" != "None" ]]; then
+            echo "La etiqueta ya existe; se conserva la imagen publicada."
+            printf 'Imagen existente: %s/%s@%s\n' "$registry" "$IMAGE_NAME" "$digest" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [[ "$failure" != "ImageNotFound" ]]; then
+            printf 'No se pudo consultar la imagen en ECR: %s\n' "$failure" >&2
+            exit 1
+          fi
+
+          aws ecr get-login-password --region "$AWS_REGION" |
+            docker login --username AWS --password-stdin "$registry"
+
+          docker tag "$IMAGE_NAME:$IMAGE_TAG" "$image"
+          docker push "$image"
+
+          printf 'Imagen publicada: %s\n' "$image" >> "$GITHUB_STEP_SUMMARY"
