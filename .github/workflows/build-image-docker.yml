@@ -4,38 +4,19 @@ on:
   workflow_call:
     inputs:
       context:
-        description: Carpeta utilizada como contexto de construcción
-        required: false
         type: string
         default: "."
-
       dockerfile:
-        description: Ruta del Dockerfile desde la raíz del repositorio
-        required: false
         type: string
         default: "Dockerfile"
-
       image-name:
-        description: Nombre de la imagen que construiremos
-        required: true
-        type: string
-
-      publish-to-ecr:
-        type: boolean
-        default: false
-
-      aws-region:
-        type: string
-        default: ""
-
-      aws-account-id:
         type: string
         default: ""
 
     secrets:
-      aws-access-key-id:
+      AWS_ECR_PUBLISHER_ACCESS_KEY_ID:
         required: false
-      aws-secret-access-key:
+      AWS_ECR_PUBLISHER_SECRET_ACCESS_KEY:
         required: false
 
 permissions:
@@ -48,25 +29,15 @@ jobs:
     timeout-minutes: 15
 
     env:
-      BUILD_CONTEXT: ${{ inputs.context }}
-      DOCKERFILE: ${{ inputs.dockerfile }}
-      IMAGE_NAME: ${{ inputs.image-name }}
+      IMAGE_NAME: ${{ inputs.image-name || github.event.repository.name }}
       IMAGE_TAG: sha-${{ github.sha }}
-      AWS_REGION: ${{ inputs.aws-region }}
-      AWS_ACCOUNT_ID: ${{ inputs.aws-account-id }}
-      PUBLISH_TO_ECR: ${{ inputs.publish-to-ecr && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      PUBLISH_TO_ECR: ${{ vars.AWS_IMAGE_PUBLISH_ENABLED == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
     steps:
       - name: Obtener el código de la aplicación
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Construir imagen Docker
-        shell: bash
-        run: |
-          docker build \
-            --file "$DOCKERFILE" \
-            --tag "$IMAGE_NAME:$IMAGE_TAG" \
-            "$BUILD_CONTEXT"
 
       - name: Comprobar configuración AWS
         if: env.PUBLISH_TO_ECR == 'true'
@@ -81,44 +52,59 @@ jobs:
         if: env.PUBLISH_TO_ECR == 'true'
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          aws-region: ${{ inputs.aws-region }}
-          aws-access-key-id: ${{ secrets.aws-access-key-id }}
-          aws-secret-access-key: ${{ secrets.aws-secret-access-key }}
-          allowed-account-ids: ${{ inputs.aws-account-id }}
+          aws-region: ${{ vars.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ECR_PUBLISHER_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_ECR_PUBLISHER_SECRET_ACCESS_KEY }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
           force-skip-oidc: true
-          
-      - name: Publicar imagen en ECR
+
+      - name: Comprobar si la imagen ya existe
+        id: existing
         if: env.PUBLISH_TO_ECR == 'true'
         shell: bash
         run: |
-          registry="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-          image="$registry/$IMAGE_NAME:$IMAGE_TAG"
+          error_file=$(mktemp)
+          trap 'rm -f "$error_file"' EXIT
 
-          result=$(aws ecr batch-get-image \
+          if digest=$(aws ecr describe-images \
             --registry-id "$AWS_ACCOUNT_ID" \
             --repository-name "$IMAGE_NAME" \
             --image-ids "imageTag=$IMAGE_TAG" \
-            --query '[images[0].imageId.imageDigest, failures[0].failureCode]' \
+            --query 'imageDetails[0].imageDigest' \
             --output text \
-            --no-cli-pager)
-
-          read -r digest failure <<< "$result"
-
-          if [[ -n "$digest" && "$digest" != "None" ]]; then
+            --no-cli-pager 2>"$error_file"); then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "La etiqueta ya existe; se conserva la imagen publicada."
-            printf 'Imagen existente: %s/%s@%s\n' "$registry" "$IMAGE_NAME" "$digest" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          if [[ "$failure" != "ImageNotFound" ]]; then
-            printf 'No se pudo consultar la imagen en ECR: %s\n' "$failure" >&2
+            printf 'Digest existente: %s\n' "$digest" >> "$GITHUB_STEP_SUMMARY"
+          elif grep -q 'ImageNotFoundException' "$error_file"; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            cat "$error_file" >&2
             exit 1
           fi
 
-          aws ecr get-login-password --region "$AWS_REGION" |
-            docker login --username AWS --password-stdin "$registry"
+      - name: Autenticar Docker en ECR
+        id: login-ecr
+        if: env.PUBLISH_TO_ECR == 'true' && steps.existing.outputs.exists != 'true'
+        uses: aws-actions/amazon-ecr-login@aded0d722166a37980e030aa969dda0bfe6b6947 # v2.1.7
+        with:
+          registries: ${{ vars.AWS_ACCOUNT_ID }}
 
-          docker tag "$IMAGE_NAME:$IMAGE_TAG" "$image"
-          docker push "$image"
+      - name: Preparar Docker Buildx
+        if: steps.existing.outputs.exists != 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-          printf 'Imagen publicada: %s\n' "$image" >> "$GITHUB_STEP_SUMMARY"
+      - name: Construir y publicar si corresponde
+        if: steps.existing.outputs.exists != 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: ${{ env.PUBLISH_TO_ECR == 'true' }}
+          load: ${{ env.PUBLISH_TO_ECR != 'true' }}
+          tags: >-
+            ${{ env.PUBLISH_TO_ECR == 'true'
+                && format('{0}/{1}:{2}', steps.login-ecr.outputs.registry, env.IMAGE_NAME, env.IMAGE_TAG)
+                || format('{0}:{1}', env.IMAGE_NAME, env.IMAGE_TAG) }}
