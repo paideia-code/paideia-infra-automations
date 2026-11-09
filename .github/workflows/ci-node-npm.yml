@@ -40,6 +40,12 @@ jobs:
       - name: Instalar dependencias
         run: npm ci
 
+      - name: Comprobar formato
+        run: npm run format:check
+
+      - name: Ejecutar lint
+        run: npm run lint:check
+
       - name: Ejecutar pruebas unitarias
         run: npm test -- --ci --runInBand
 

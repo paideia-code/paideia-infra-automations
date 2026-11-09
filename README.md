@@ -9,6 +9,22 @@ Separación acordada el 9 de noviembre de 2026. Esta carpeta contiene la base
 documental; todavía no hay workflows implementados ni se ha publicado desde aquí
 un nuevo repositorio GitHub.
 
+## CI Node con npm
+
+El workflow reutilizable está en `.github/workflows/ci-node-npm.yml`.
+
+La versión v0.2.0 requiere estos scripts en la aplicación:
+
+- `format:check`
+- `lint:check`
+- `test`
+- `build`
+
+Si `run-integration-tests` es `true`, también requiere `test:e2e`.
+
+Los comandos de pruebas actuales utilizan argumentos de Jest.
+La versión de Node se obtiene del `package.json` de la aplicación.
+
 ## Responsabilidad
 
 | Repositorio | Contenido |
