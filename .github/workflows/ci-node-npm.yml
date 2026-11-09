@@ -1,0 +1,51 @@
+name: CI Node Npm
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Carpeta que contiene la aplicación
+        required: false
+        type: string
+        default: "."
+
+      run-integration-tests:
+        description: Ejecutar las pruebas del script test:e2e
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validar aplicación Node
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+      - name: Obtener el código de la aplicación
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Preparar Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: ${{ inputs.working-directory }}/package.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Ejecutar pruebas unitarias
+        run: npm test -- --ci --runInBand
+
+      - name: Ejecutar pruebas de integración
+        if: ${{ inputs.run-integration-tests }}
+        run: npm run test:e2e -- --ci --runInBand
+
+      - name: Compilar aplicación
+        run: npm run build
