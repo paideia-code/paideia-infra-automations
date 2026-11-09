@@ -1,0 +1,46 @@
+name: Construir imagen Docker
+
+on:
+  workflow_call:
+    inputs:
+      context:
+        description: Carpeta utilizada como contexto de construcción
+        required: false
+        type: string
+        default: "."
+
+      dockerfile:
+        description: Ruta del Dockerfile desde la raíz del repositorio
+        required: false
+        type: string
+        default: "Dockerfile"
+
+      image-name:
+        description: Nombre de la imagen que construiremos
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Construir imagen
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Obtener el código de la aplicación
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Construir imagen Docker
+        env:
+          BUILD_CONTEXT: ${{ inputs.context }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          IMAGE_NAME: ${{ inputs.image-name }}
+          IMAGE_TAG: sha-${{ github.sha }}
+        run: |
+          docker build \
+            --file "$DOCKERFILE" \
+            --tag "$IMAGE_NAME:$IMAGE_TAG" \
+            "$BUILD_CONTEXT"

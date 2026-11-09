@@ -25,6 +25,13 @@ Si `run-integration-tests` es `true`, también requiere `test:e2e`.
 Los comandos de pruebas actuales utilizan argumentos de Jest.
 La versión de Node se obtiene del `package.json` de la aplicación.
 
+## Construcción de imágenes
+
+`build-image.yml` construye una imagen utilizando el Dockerfile del consumidor.
+
+Recibe `context`, `dockerfile` e `image-name`. La etiqueta se basa en el commit.
+Por ahora comprueba la construcción: no publica ni conserva la imagen.
+
 ## Responsabilidad
 
 | Repositorio | Contenido |
