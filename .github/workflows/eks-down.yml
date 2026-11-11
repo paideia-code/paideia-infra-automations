@@ -1,0 +1,122 @@
+name: Retirar EKS
+
+on:
+  workflow_call:
+    inputs:
+      cluster-directory:
+        required: true
+        type: string
+      cluster-name:
+        required: true
+        type: string
+      aws-region:
+        required: true
+        type: string
+      aws-account-id:
+        required: true
+        type: string
+      admin-cidr:
+        required: true
+        type: string
+      terraform-version:
+        required: true
+        type: string
+      confirmation:
+        required: true
+        type: string
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  down:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      CLUSTER_DIR: ${{ inputs.cluster-directory }}
+      CLUSTER_NAME: ${{ inputs.cluster-name }}
+      CONFIRMATION: ${{ inputs.confirmation }}
+      TF_VAR_admin_cidr: ${{ inputs.admin-cidr }}
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      AWS_PAGER: ""
+
+    steps:
+      - name: Comprobar la confirmacion
+        run: |
+          if [[ "$CONFIRMATION" != "$CLUSTER_NAME" ]]; then
+            echo "La confirmacion debe coincidir con el nombre del cluster." >&2
+            exit 1
+          fi
+
+      - name: Obtener la configuracion del ambiente
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Autenticar en AWS
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-region: ${{ inputs.aws-region }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          allowed-account-ids: ${{ inputs.aws-account-id }}
+          force-skip-oidc: true
+
+      - name: Preparar Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+          terraform_wrapper: false
+
+      - name: Inicializar Terraform
+        run: terraform -chdir="$CLUSTER_DIR/terraform" init -lockfile=readonly
+
+      - name: Preparar y comprobar el plan de retirada
+        run: |
+          terraform -chdir="$CLUSTER_DIR/terraform" plan -destroy \
+            -lock-timeout=5m -out="$RUNNER_TEMP/down.tfplan"
+          terraform -chdir="$CLUSTER_DIR/terraform" show \
+            -json "$RUNNER_TEMP/down.tfplan" > "$RUNNER_TEMP/down.json"
+
+          python3 - "$RUNNER_TEMP/down.json" "$CLUSTER_NAME" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              plan = json.load(source)
+
+          blocked = [
+              resource["address"]
+              for resource in plan.get("resource_changes", [])
+              if resource["mode"] == "managed" and (
+                  not resource["address"].startswith(("module.eks.", "module.network."))
+                  or resource["type"].startswith("aws_iam_")
+                  or resource["change"]["actions"] not in (["delete"], ["no-op"])
+                  or (
+                      resource["type"] == "aws_eks_cluster"
+                      and resource["change"]["before"]["name"] != sys.argv[2]
+                  )
+              )
+          ]
+
+          if blocked:
+              raise SystemExit("Plan de retirada no permitido: " + ", ".join(blocked))
+          PY
+
+      - name: Aplicar la retirada
+        timeout-minutes: 60
+        run: |
+          terraform -chdir="$CLUSTER_DIR/terraform" apply \
+            -lock-timeout=5m "$RUNNER_TEMP/down.tfplan"
+          echo "Retirada Terraform completada para $CLUSTER_NAME." >> "$GITHUB_STEP_SUMMARY"
