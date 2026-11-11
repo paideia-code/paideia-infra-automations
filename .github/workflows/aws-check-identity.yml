@@ -1,0 +1,55 @@
+name: Comprobar identidad AWS
+
+on:
+  workflow_call:
+    inputs:
+      aws-region:
+        required: true
+        type: string
+      aws-account-id:
+        required: true
+        type: string
+      expected-principal-arn:
+        required: true
+        type: string
+
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    env:
+      EXPECTED_PRINCIPAL_ARN: ${{ inputs.expected-principal-arn }}
+
+    steps:
+      - name: Autenticar en AWS
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-region: ${{ inputs.aws-region }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          allowed-account-ids: ${{ inputs.aws-account-id }}
+          force-skip-oidc: true
+
+      - name: Comprobar la identidad esperada
+        shell: bash
+        run: |
+          actual_arn="$(aws sts get-caller-identity --query Arn --output text)"
+
+          if [[ "$actual_arn" != "$EXPECTED_PRINCIPAL_ARN" ]]; then
+            echo "Identidad AWS inesperada: $actual_arn" >&2
+            exit 1
+          fi
+
+          printf '%s\n' \
+            "Identidad verificada: $actual_arn" \
+            >> "$GITHUB_STEP_SUMMARY"
