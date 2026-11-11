@@ -151,6 +151,7 @@ jobs:
             if kubectl --request-timeout=10s get nodes; then
               break
             fi
+            echo "Esperando acceso a Kubernetes: intento $attempt/18"
             sleep 10
           done
           kubectl wait --for=condition=Ready nodes --all --timeout=300s
