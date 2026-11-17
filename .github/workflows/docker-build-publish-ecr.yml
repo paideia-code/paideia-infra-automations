@@ -1,4 +1,4 @@
-name: Construir imagen Docker
+name: Docker - Construir imagen y publicar en ECR
 
 on:
   workflow_call:

@@ -1,4 +1,4 @@
-name: Comprobar identidad AWS
+name: AWS - Comprobar identidad
 
 on:
   workflow_call:

@@ -1,4 +1,4 @@
-name: CI Node Npm
+name: Node.js (npm/Jest) - Validar aplicación
 
 on:
   workflow_call:

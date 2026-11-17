@@ -1,67 +1,43 @@
-# Automatizaciones de Paideia Code
+# paideia-infra-automations
 
-Procesos reutilizables para validar aplicaciones, construir y publicar imágenes
-y ejecutar operaciones comunes de infraestructura.
+Tareas reutilizables de GitHub Actions para los repositorios de Paideia. Los consumidores deciden cuándo ejecutarlas y proporcionan entradas, variables y secretos.
 
-## Estado
+## Tareas disponibles
 
-Separación acordada el 9 de noviembre de 2026. Esta carpeta contiene la base
-documental; todavía no hay workflows implementados ni se ha publicado desde aquí
-un nuevo repositorio GitHub.
+| Tarea | Propósito | Workflow |
+| --- | --- | --- |
+| **Node.js / npm / Jest** | Comprobar formato y lint, ejecutar pruebas y compilar. | [node-npm-jest-ci.yml](.github/workflows/node-npm-jest-ci.yml) |
+| **Docker / ECR** | Construir imágenes y publicarlas en ECR cuando corresponda. | [docker-build-publish-ecr.yml](.github/workflows/docker-build-publish-ecr.yml) |
+| **Identidad AWS** | Comprobar la cuenta y la identidad esperadas. | [aws-identity-check.yml](.github/workflows/aws-identity-check.yml) |
 
-## CI Node con npm
+El repositorio también tiene su propio [CI de workflows](.github/workflows/ci-workflows.yml). Los procedimientos específicos de sandbox están en `paideia-infra-config`.
 
-El workflow reutilizable está en `.github/workflows/ci-node-npm.yml`.
+## Uso desde otro repositorio
 
-La versión v0.2.0 requiere estos scripts en la aplicación:
+Ejemplo de `.github/workflows/ci.yml` en una aplicación:
 
-- `format:check`
-- `lint:check`
-- `test`
-- `build`
+```yaml
+name: CI
 
-Si `run-integration-tests` es `true`, también requiere `test:e2e`.
+on: [push, pull_request]
 
-Los comandos de pruebas actuales utilizan argumentos de Jest.
-La versión de Node se obtiene del `package.json` de la aplicación.
+permissions:
+  contents: read
 
-## Construcción de imágenes
-
-`build-image.yml` construye una imagen utilizando el Dockerfile del consumidor.
-
-Recibe `context`, `dockerfile` e `image-name`. La etiqueta se basa en el commit.
-Por ahora comprueba la construcción: no publica ni conserva la imagen.
-
-## Responsabilidad
-
-| Repositorio | Contenido |
-| --- | --- |
-| paideia-infra-terraform | Módulos escritos para Terraform |
-| paideia-infra-platform | Charts y configuración común de Kubernetes |
-| paideia-infra-automations | Workflows reutilizables y auxiliares comunes |
-| paideia-infra-environments | Configuración y política de cada ambiente |
-
-Los repositorios de aplicaciones conservan sus propios eventos de CI y parámetros.
-Environments conserva las entradas para promover versiones y levantar o retirar
-ambientes. Esos workflows pequeños llaman a las piezas comunes de este repositorio.
-
-Un workflow reutilizable no decide por sí solo qué aplicación desplegar ni crea
-AWS al publicarse. Los consumidores eligen una referencia revisada y versionada.
-
-## Estructura prevista
-
-```text
-.github/workflows/
-  ci-node.yml
-  ci-java.yml
-  ci-go.yml
-  build-image.yml
-scripts/                  # Solo cuando un procedimiento necesite un auxiliar
+jobs:
+  validate:
+    uses: paideia-code/paideia-infra-automations/.github/workflows/node-npm-jest-ci.yml@v0.9.0
 ```
 
-Los workflows reutilizables estarán directamente en `.github/workflows/`, sin
-subcarpetas. Recibirán parámetros mediante `workflow_call`. Crearemos las piezas
-al comprobar su uso, comenzando con pruebas y construcción del template Nest.
+La versión referenciada debe estar publicada y contener el workflow. Para distribuir cambios, se publica una nueva versión y después se actualizan sus consumidores.
 
-Consulta el [diseño general](../paideia-infra-platform/docs/arquitectura.md) y el
-[flujo de despliegues](../paideia-infra-platform/docs/despliegues.md).
+## Operación
+
+| Aspecto | Funcionamiento |
+| --- | --- |
+| Contrato | Las tareas reutilizables reciben su configuración mediante `workflow_call`. |
+| Credenciales | El consumidor proporciona los secretos necesarios desde GitHub Actions. |
+| Recursos AWS | Los repositorios ECR y permisos se preparan previamente en `paideia-infra-config`. |
+| Despliegue | La publicación de una imagen y la selección de la versión desplegada son pasos separados. |
+
+Entradas, condiciones de publicación y secretos requeridos: [guía de workflows](.github/workflows/README.md).
