@@ -80,5 +80,5 @@ jobs:
           IMAGE_REF: ${{ steps.image.outputs.ref }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          printf 'Imagen: `%s`\n\nDigest: `%s`\n' \
+          printf 'Imagen: %s\n\nDigest: %s\n' \
             "$IMAGE_REF" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
