@@ -1,0 +1,84 @@
+name: Docker - Construir imagen y publicar en GHCR
+
+on:
+  workflow_call:
+    inputs:
+      context:
+        type: string
+        default: "."
+      dockerfile:
+        type: string
+        default: "Dockerfile"
+      image-name:
+        type: string
+        default: ""
+      version:
+        description: Versión de la imagen, con o sin prefijo v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Construir y publicar imagen
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    env:
+      IMAGE_NAME: ${{ inputs.image-name || github.event.repository.name }}
+      IMAGE_VERSION: ${{ inputs.version }}
+
+    steps:
+      - name: Obtener el código de la aplicación
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Preparar referencia de la imagen
+        id: image
+        shell: bash
+        run: |
+          version="${IMAGE_VERSION#v}"
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "La versión debe tener el formato 0.0.1 o v0.0.1." >&2
+            exit 1
+          fi
+
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME,,}:$version"
+          echo "ref=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Autenticar Docker en GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Preparar Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Construir y publicar
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          tags: ${{ steps.image.outputs.ref }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Mostrar imagen publicada
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          printf 'Imagen: `%s`\n\nDigest: `%s`\n' \
+            "$IMAGE_REF" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
